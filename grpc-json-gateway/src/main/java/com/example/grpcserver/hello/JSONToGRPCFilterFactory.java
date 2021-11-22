@@ -3,21 +3,15 @@ package com.example.grpcserver.hello;
 import io.grpc.ManagedChannel;
 import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
-import io.netty.buffer.PooledByteBufAllocator;
-import org.reactivestreams.Publisher;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.NettyWriteResponseFilter;
 import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
-import org.springframework.core.ResolvableType;
-import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.NettyDataBufferFactory;
-import org.springframework.http.codec.json.Jackson2JsonDecoder;
-import org.springframework.http.server.reactive.ServerHttpResponseDecorator;
+import org.springframework.cloud.gateway.filter.factory.rewrite.ModifyResponseBodyGatewayFilterFactory;
+import org.springframework.cloud.gateway.filter.factory.rewrite.RewriteFunction;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import javax.net.ssl.SSLException;
@@ -27,33 +21,46 @@ import java.net.URI;
 import java.security.cert.X509Certificate;
 
 import static io.grpc.netty.shaded.io.grpc.netty.NegotiationType.TLS;
-import static org.springframework.cloud.gateway.support.GatewayToStringStyler.filterToStringCreator;
 
 @Component
 public class JSONToGRPCFilterFactory extends AbstractGatewayFilterFactory<Object> {
+
+    private final ModifyResponseBodyGatewayFilterFactory modifyResponseBodyGatewayFilterFactory;
+
+    public JSONToGRPCFilterFactory(ModifyResponseBodyGatewayFilterFactory modifyResponseBodyGatewayFilterFactory) {
+        this.modifyResponseBodyGatewayFilterFactory = modifyResponseBodyGatewayFilterFactory;
+    }
 
     @Override
     public GatewayFilter apply(Object config) {
         GatewayFilter filter = new GatewayFilter() {
             @Override
             public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-                GRPCResponseDecorator modifiedResponse = new GRPCResponseDecorator(exchange);
+                ModifyResponseBodyGatewayFilterFactory.Config modifyResponseBodyConfig = new ModifyResponseBodyGatewayFilterFactory.Config();
+                modifyResponseBodyConfig.setInClass(JSONHelloRequest.class);
+                modifyResponseBodyConfig.setOutClass(JSONHelloResponse.class);
+                modifyResponseBodyConfig.setNewContentType("application/json");
 
-                return modifiedResponse
-                        .writeWith(exchange.getRequest().getBody())
-                        .then(chain.filter(exchange.mutate()
-                                .response(modifiedResponse).build()));
-            }
+                RewriteFunction<JSONHelloRequest, JSONHelloResponse> rewriteFunction = (rewriteExchange, body) -> {
+                    URI requestURI = rewriteExchange.getRequest().getURI();
+                    ManagedChannel channel = createSecuredChannel(requestURI.getHost(), 6565);
+                    String firstName = body.getFirstName();
+                    String lastName = body.getLastName();
+                    HelloResponse greetingFromGRPC = HelloServiceGrpc.newBlockingStub(channel)
+                            .hello(HelloRequest.newBuilder()
+                                    .setFirstName(firstName)
+                                    .setLastName(lastName)
+                                    .build());
 
-            @Override
-            public String toString() {
-                return filterToStringCreator(
-                        JSONToGRPCFilterFactory.this)
-                        .toString();
+                    return Mono.just(new JSONHelloResponse(greetingFromGRPC.getGreeting()));
+                };
+                modifyResponseBodyConfig.setRewriteFunction(rewriteFunction);
+
+                return Mono.just(modifyResponseBodyGatewayFilterFactory.apply(modifyResponseBodyConfig))
+                                .then(chain.filter(exchange));
             }
         };
-
-        int order = NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER - 1;
+        int order = NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER + 1;
         return new OrderedGatewayFilter(filter, order);
     }
 
@@ -62,103 +69,30 @@ public class JSONToGRPCFilterFactory extends AbstractGatewayFilterFactory<Object
         return "JSONToGRPCFilter";
     }
 
-    static class GRPCResponseDecorator extends ServerHttpResponseDecorator {
+    private ManagedChannel createSecuredChannel(String host, int port) {
+        TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
+                    }
 
-        private final ServerWebExchange exchange;
+                    public void checkClientTrusted(X509Certificate[] certs,
+                                                   String authType) {
+                    }
 
-        public GRPCResponseDecorator(ServerWebExchange exchange) {
-            super(exchange.getResponse());
-            this.exchange = exchange;
+                    public void checkServerTrusted(X509Certificate[] certs,
+                                                   String authType) {
+                    }
+                }};
+
+        try {
+            return NettyChannelBuilder.forAddress(host, port)
+                    .useTransportSecurity().sslContext(
+                            GrpcSslContexts.forClient().trustManager(trustAllCerts[0])
+                                    .build()).negotiationType(TLS).build();
+        } catch (SSLException e) {
+            e.printStackTrace();
         }
-
-        @Override
-        public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
-            URI requestURI = exchange.getRequest().getURI();
-            ManagedChannel channel = createSecuredChannel(requestURI.getHost(), 6565);
-
-            return getDelegate().writeWith(deserializeJSONRequest()
-                    .map(jsonRequest -> {
-                        String firstName = jsonRequest.getFirstName();
-                        String lastName = jsonRequest.getLastName();
-                        return HelloServiceGrpc.newBlockingStub(channel)
-                                .hello(HelloRequest.newBuilder()
-                                        .setFirstName(firstName)
-                                        .setLastName(lastName)
-                                        .build());
-                    })
-                    .map(gRPCResponse -> new NettyDataBufferFactory(new PooledByteBufAllocator()).wrap(gRPCResponse.toByteArray()))
-                    .cast(DataBuffer.class)
-                    .last());
-        }
-
-        private Flux<PersonHello> deserializeJSONRequest() {
-            return exchange.getRequest()
-                    .getBody()
-                    .mapNotNull(dataBufferBody -> {
-                        ResolvableType targetType = ResolvableType.forType(PersonHello.class);
-                        return new Jackson2JsonDecoder()
-                                .decode(dataBufferBody, targetType, null, null);
-                    })
-                    .cast(PersonHello.class);
-        }
-
-        private ManagedChannel createSecuredChannel(String host, int port) {
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                    new X509TrustManager() {
-                        public X509Certificate[] getAcceptedIssuers() {
-                            return new X509Certificate[0];
-                        }
-
-                        public void checkClientTrusted(X509Certificate[] certs,
-                                                       String authType) {
-                        }
-
-                        public void checkServerTrusted(X509Certificate[] certs,
-                                                       String authType) {
-                        }
-                    }};
-
-            try {
-                return NettyChannelBuilder.forAddress(host, port)
-                        .useTransportSecurity().sslContext(
-                                GrpcSslContexts.forClient().trustManager(trustAllCerts[0])
-                                        .build()).negotiationType(TLS).build();
-            } catch (SSLException e) {
-                e.printStackTrace();
-            }
-            throw new RuntimeException();
-        }
-
+        throw new RuntimeException();
     }
-
-    static class PersonHello {
-
-        private String firstName;
-        private String lastName;
-
-        public PersonHello() {
-        }
-
-        public PersonHello(String firstName, String lastName) {
-            this.firstName = firstName;
-            this.lastName = lastName;
-        }
-
-        public String getFirstName() {
-            return firstName;
-        }
-
-        public void setFirstName(String firstName) {
-            this.firstName = firstName;
-        }
-
-        public String getLastName() {
-            return lastName;
-        }
-
-        public void setLastName(String lastName) {
-            this.lastName = lastName;
-        }
-    }
-
 }
