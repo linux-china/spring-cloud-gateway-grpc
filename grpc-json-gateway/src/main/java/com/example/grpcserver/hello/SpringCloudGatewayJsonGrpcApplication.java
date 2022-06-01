@@ -4,10 +4,10 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class SpringCloudGatewayGrpcApplication {
+public class SpringCloudGatewayJsonGrpcApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(SpringCloudGatewayGrpcApplication.class, args);
+        SpringApplication.run(SpringCloudGatewayJsonGrpcApplication.class, args);
     }
 
 }
