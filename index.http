@@ -17,3 +17,6 @@ GRPC https://localhost:8090/com.example.grpcserver.hello.HelloService/hello
   "lastName": "Chen"
 }
 
+### normal http Gateway
+//@name gw-ip
+GET https://localhost:8090/ip
