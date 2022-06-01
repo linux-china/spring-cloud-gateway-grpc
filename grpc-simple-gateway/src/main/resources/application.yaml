@@ -19,5 +19,6 @@ spring:
           uri: https://localhost:6565
           predicates:
             - Path=/**
+            - Header=Content-Type, application/grpc.*
           filters:
             - AddResponseHeader=X-Request-header, header-value
