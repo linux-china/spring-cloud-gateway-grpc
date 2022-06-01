@@ -1,0 +1,19 @@
+### json call
+//@name gw-json
+POST https://localhost:8091/json/com.example.grpcserver.hello.HelloService/hello
+Content-Type: application/json
+
+{
+  "firstName": "Libing",
+  "lastName": "Chen"
+}
+
+### json rpc call
+//@name gw-grpc
+GRPC https://localhost:8090/com.example.grpcserver.hello.HelloService/hello
+
+{
+  "firstName": "Libing",
+  "lastName": "Chen"
+}
+
