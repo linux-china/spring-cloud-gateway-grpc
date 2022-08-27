@@ -1,8 +1,8 @@
 plugins {
-  id 'org.springframework.boot' version '2.7.0'
-  id 'io.spring.dependency-management' version '1.0.11.RELEASE'
+  id 'org.springframework.boot' version '2.7.3'
+  id 'io.spring.dependency-management' version '1.0.13.RELEASE'
   id 'java'
-  id "io.github.lognet.grpc-spring-boot" version '4.7.0'
+  id "io.github.lognet.grpc-spring-boot" version '4.8.0'
 }
 
 apply plugin: 'com.google.protobuf'
@@ -20,7 +20,7 @@ repositories {
 }
 
 dependencies {
-  implementation 'io.github.lognet:grpc-spring-boot-starter:4.7.0'
+  implementation 'io.github.lognet:grpc-spring-boot-starter:4.8.0'
   implementation 'org.springframework.boot:spring-boot-starter-webflux'
   testImplementation 'org.springframework.boot:spring-boot-starter-test'
   testImplementation 'io.projectreactor:reactor-test'
